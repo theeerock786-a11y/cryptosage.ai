@@ -1,0 +1,300 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { 
+  Activity, 
+  Cpu, 
+  Settings, 
+  Zap, 
+  Play, 
+  Pause,
+  RefreshCw,
+  TrendingUp,
+  AlertTriangle
+} from 'lucide-react';
+
+import { SUPPORTED_COINS, AiSignal, CoinConfig } from './types';
+import { fetchTicker } from './services/marketService';
+import { generateSignal } from './services/geminiService';
+import SignalCard from './components/SignalCard';
+import MarketChart from './components/MarketChart';
+
+// --- Helper for Mock Chart Data ---
+// Since we don't have a history API without keys, we generate a smooth random walk based on current price
+const generateMockHistory = (currentPrice: number) => {
+  const points = [];
+  let price = currentPrice;
+  const now = Date.now();
+  for (let i = 20; i >= 0; i--) {
+    points.push({
+      time: new Date(now - i * 60000).toLocaleTimeString(),
+      price: price
+    });
+    // Random walk
+    price = price * (1 + (Math.random() * 0.02 - 0.01)); 
+  }
+  return points;
+};
+
+const App: React.FC = () => {
+  const [signals, setSignals] = useState<AiSignal[]>([]);
+  const [selectedCoin, setSelectedCoin] = useState<CoinConfig>(SUPPORTED_COINS[0]);
+  const [isAutoMode, setIsAutoMode] = useState(false);
+  const [riskProfile, setRiskProfile] = useState<'Conservative' | 'Aggressive'>('Conservative');
+  const [isLoading, setIsLoading] = useState(false);
+  const [marketPrice, setMarketPrice] = useState<string | null>(null);
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [statusMessage, setStatusMessage] = useState("Ready to analyze markets.");
+  
+  // Timer ref for auto-mode
+  const autoTimerRef = useRef<number | null>(null);
+
+  // --- Core Analysis Logic ---
+  const runAnalysis = useCallback(async (coin: CoinConfig) => {
+    setIsLoading(true);
+    setStatusMessage(`Fetching market data for ${coin.name}...`);
+    
+    try {
+      // 1. Get Real Market Data
+      const ticker = await fetchTicker(coin.symbol);
+      setMarketPrice(ticker.lastPrice);
+      setChartData(generateMockHistory(parseFloat(ticker.lastPrice)));
+
+      // 2. Ask Gemini
+      setStatusMessage(`Gemini AI analyzing ${coin.name} structure...`);
+      const newSignal = await generateSignal(ticker, riskProfile);
+      
+      // 3. Update State
+      setSignals(prev => [newSignal, ...prev]);
+      setStatusMessage(`Signal generated for ${coin.name}.`);
+    } catch (error) {
+      console.error(error);
+      setStatusMessage("Analysis failed. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [riskProfile]);
+
+  // --- Auto Mode Effect ---
+  useEffect(() => {
+    if (isAutoMode) {
+      setStatusMessage("Auto-Pilot Engaged. Scanning markets...");
+      const scan = async () => {
+        // Pick a random coin to analyze
+        const randomCoin = SUPPORTED_COINS[Math.floor(Math.random() * SUPPORTED_COINS.length)];
+        setSelectedCoin(randomCoin);
+        await runAnalysis(randomCoin);
+      };
+
+      // Initial run
+      scan();
+
+      // Interval (every 15 seconds for demo purposes)
+      autoTimerRef.current = window.setInterval(scan, 15000);
+    } else {
+      if (autoTimerRef.current) {
+        clearInterval(autoTimerRef.current);
+      }
+    }
+
+    return () => {
+      if (autoTimerRef.current) clearInterval(autoTimerRef.current);
+    };
+  }, [isAutoMode, runAnalysis]);
+
+  // Initial Load Data for display (without generating signal)
+  useEffect(() => {
+    fetchTicker(selectedCoin.symbol).then(t => {
+      setMarketPrice(t.lastPrice);
+      setChartData(generateMockHistory(parseFloat(t.lastPrice)));
+    });
+  }, [selectedCoin]);
+
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-900 to-black text-white font-sans selection:bg-indigo-500 selection:text-white">
+      
+      {/* --- Header --- */}
+      <header className="sticky top-0 z-50 border-b border-gray-800 glass-panel">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/20">
+              <Cpu size={24} className="text-white animate-pulse" />
+            </div>
+            <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+              CryptoSage <span className="text-indigo-400">AI</span>
+            </h1>
+          </div>
+          
+          <div className="flex items-center gap-4">
+             <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-gray-800 border border-gray-700">
+                <div className={`w-2 h-2 rounded-full ${isAutoMode ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
+                <span className="text-xs font-mono text-gray-400">{isAutoMode ? 'LIVE FEED' : 'MANUAL'}</span>
+             </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        {/* --- Left Column: Controls & Chart --- */}
+        <div className="lg:col-span-4 space-y-6">
+          
+          {/* Status Card */}
+          <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700 shadow-xl">
+             <div className="flex items-center justify-between mb-4">
+               <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                 <Activity size={16} /> Market Scanner
+               </h2>
+               {marketPrice && (
+                 <span className="font-mono text-xl text-white font-bold animate-pulse">
+                   ${parseFloat(marketPrice).toLocaleString()}
+                 </span>
+               )}
+             </div>
+
+             {/* Chart */}
+             <div className="h-48 bg-gray-900 rounded-lg overflow-hidden relative">
+                {chartData.length > 0 ? (
+                  <MarketChart data={chartData} color="#6366f1" />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-gray-600 text-sm">No Data</div>
+                )}
+             </div>
+             
+             <div className="mt-4 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                {SUPPORTED_COINS.map(coin => (
+                  <button
+                    key={coin.symbol}
+                    onClick={() => {
+                      setIsAutoMode(false);
+                      setSelectedCoin(coin);
+                    }}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap ${
+                      selectedCoin.symbol === coin.symbol 
+                      ? 'bg-indigo-600 text-white' 
+                      : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    <span>{coin.icon}</span> {coin.name}
+                  </button>
+                ))}
+             </div>
+          </div>
+
+          {/* Control Panel */}
+          <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Settings size={18} className="text-gray-400" /> Configuration
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2 uppercase">Risk Profile</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setRiskProfile('Conservative')}
+                    className={`p-2 rounded-md text-sm border ${
+                      riskProfile === 'Conservative' 
+                      ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' 
+                      : 'border-gray-700 bg-gray-800 text-gray-500'
+                    }`}
+                  >
+                    Conservative
+                  </button>
+                  <button
+                    onClick={() => setRiskProfile('Aggressive')}
+                    className={`p-2 rounded-md text-sm border ${
+                      riskProfile === 'Aggressive' 
+                      ? 'border-rose-500 bg-rose-500/10 text-rose-400' 
+                      : 'border-gray-700 bg-gray-800 text-gray-500'
+                    }`}
+                  >
+                    Aggressive
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-700">
+                <button
+                  onClick={() => setIsAutoMode(!isAutoMode)}
+                  className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${
+                    isAutoMode 
+                    ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/50' 
+                    : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg shadow-indigo-500/25'
+                  }`}
+                >
+                  {isAutoMode ? (
+                    <>
+                      <Pause size={18} fill="currentColor" /> Stop Auto-Pilot
+                    </>
+                  ) : (
+                    <>
+                      <Play size={18} fill="currentColor" /> Start Auto-Pilot
+                    </>
+                  )}
+                </button>
+                
+                {!isAutoMode && (
+                  <button
+                    disabled={isLoading}
+                    onClick={() => runAnalysis(selectedCoin)}
+                    className="w-full mt-3 py-3 rounded-lg bg-gray-700 text-gray-200 font-bold flex items-center justify-center gap-2 hover:bg-gray-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? (
+                      <RefreshCw size={18} className="animate-spin" />
+                    ) : (
+                      <Zap size={18} />
+                    )}
+                    {isLoading ? 'Analyzing...' : 'Generate Signal Now'}
+                  </button>
+                )}
+              </div>
+            </div>
+            
+            {/* Status Message */}
+            <div className="mt-4 text-center">
+              <span className="text-xs text-gray-500 font-mono animate-pulse">
+                {statusMessage}
+              </span>
+            </div>
+          </div>
+          
+          <div className="bg-yellow-900/20 border border-yellow-900/50 p-4 rounded-lg flex items-start gap-3">
+             <AlertTriangle className="text-yellow-500 shrink-0" size={20} />
+             <p className="text-xs text-yellow-200/70">
+               <strong>Disclaimer:</strong> Signals are generated by AI for educational purposes only. Not financial advice. Crypto trading involves significant risk.
+             </p>
+          </div>
+
+        </div>
+
+        {/* --- Right Column: Signal Feed --- */}
+        <div className="lg:col-span-8">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold flex items-center gap-3">
+              <TrendingUp className="text-emerald-400" /> Live Signals
+            </h2>
+            <span className="px-3 py-1 bg-gray-800 rounded-full text-xs font-mono text-gray-400">
+              {signals.length} Signals Generated
+            </span>
+          </div>
+
+          <div className="space-y-0">
+            {signals.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 bg-gray-800/30 rounded-xl border border-dashed border-gray-700">
+                <Activity size={48} className="text-gray-600 mb-4" />
+                <p className="text-gray-400 font-medium">No signals yet.</p>
+                <p className="text-gray-500 text-sm mt-1">Start Auto-Pilot or generate manually.</p>
+              </div>
+            ) : (
+              signals.map(signal => (
+                <SignalCard key={signal.id} signal={signal} />
+              ))
+            )}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default App;
